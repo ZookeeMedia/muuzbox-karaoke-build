@@ -28,11 +28,11 @@ instructions live in [docs/karaoke-build-pipeline.md](docs/karaoke-build-pipelin
 After a successful release, these URLs serve the artifacts directly:
 
 ```
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-win-x64.exe
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-arm64
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-x64
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-linux-x64
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<tag>/htdemucs.bin
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-win-x64.exe
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-arm64
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-x64
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-linux-x64
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/htdemucs.bin
 ```
 
 The installer verifies each file by SHA-256 before activating.

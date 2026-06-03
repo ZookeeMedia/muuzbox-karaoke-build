@@ -38,8 +38,8 @@ GitHub Actions UI; no scheduled runs.
 The Electron app pulls these exact URLs (set in `karaokeInstaller.js`):
 
 ```
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<bundle_version>/demucs-cli-<platform>[.exe]
-https://github.com/muuzbox/muuzbox-karaoke-build/releases/download/<bundle_version>/htdemucs.bin
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<bundle_version>/demucs-cli-<platform>[.exe]
+https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<bundle_version>/htdemucs.bin
 ```
 
 The GitHub Actions release step (in build-demucs-binary.yml) names files
@@ -59,7 +59,7 @@ To mirror after a release:
 
 ```bash
 TAG=demucs-cli-v0.1.0
-gh release download "$TAG" --repo muuzbox/muuzbox-karaoke-build --dir /tmp/karaoke-$TAG
+gh release download "$TAG" --repo ZookeeMedia/muuzbox-karaoke-build --dir /tmp/karaoke-$TAG
 
 # Push to Hetzner. Adjust the remote path to match your hosting layout.
 rsync -avz --progress /tmp/karaoke-$TAG/ \

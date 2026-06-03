@@ -1,0 +1,277 @@
+name: Build Demucs.cpp CLI
+
+# Builds the demucs-cli binary for the four platforms Muuzbox supports
+# (Windows x64, macOS arm64, macOS x64, Linux x64) and attaches them to
+# a GitHub Release. The Electron app's karaokeInstaller.js pulls the
+# binaries from there (or from Hetzner once we mirror them).
+#
+# Trigger manually via the GitHub UI ("Run workflow") — bumping the
+# DEMUCS_CPP_REF below produces a new versioned set of binaries.
+#
+# Operational notes are in docs/karaoke-build-pipeline.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: 'Bundle version tag (e.g. demucs-cli-v0.1.0). Matches BUNDLE_VERSION in karaokeInstaller.js.'
+        required: true
+        default: 'demucs-cli-v0.1.0'
+      demucs_cpp_ref:
+        description: 'demucs.cpp git ref to build (tag, branch, or SHA)'
+        required: true
+        default: 'main'
+
+env:
+  # Pin the upstream so a bad upstream commit can't break our release.
+  # Override at dispatch time via the workflow input above.
+  DEMUCS_CPP_REPO: sevagh/demucs.cpp
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label:    win-x64
+            runner:   windows-2022
+            asset:    demucs-cli.exe
+            bin_name: demucs.cpp.main.exe
+          - label:    mac-arm64
+            runner:   macos-14
+            asset:    demucs-cli
+            bin_name: demucs.cpp.main
+          - label:    mac-x64
+            runner:   macos-13
+            asset:    demucs-cli
+            bin_name: demucs.cpp.main
+          - label:    linux-x64
+            runner:   ubuntu-22.04
+            asset:    demucs-cli
+            bin_name: demucs.cpp.main
+
+    steps:
+      - name: Checkout demucs.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DEMUCS_CPP_REPO }}
+          ref:        ${{ github.event.inputs.demucs_cpp_ref }}
+          submodules: recursive
+
+      # ─── Linux deps ─────────────────────────────────────────────────
+      - name: Install build deps (Linux)
+        if: matrix.label == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential libsndfile1-dev pkg-config
+
+      # ─── macOS deps ─────────────────────────────────────────────────
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.label, 'mac-')
+        run: |
+          brew update
+          brew install cmake libsndfile
+
+      # ─── Windows deps ───────────────────────────────────────────────
+      # CMake + MSVC come pre-installed on windows-2022. vcpkg handles
+      # libsndfile.
+      - name: Set up vcpkg (Windows)
+        if: matrix.label == 'win-x64'
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg.exe install libsndfile:x64-windows-static
+        shell: pwsh
+
+      # ─── Configure + build ──────────────────────────────────────────
+      - name: Configure (Unix)
+        if: matrix.label != 'win-x64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows)
+        if: matrix.label == 'win-x64'
+        run: |
+          cmake -S . -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="${PWD}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+        shell: pwsh
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # ─── Find + rename the produced binary ──────────────────────────
+      # demucs.cpp's CMake produces a binary whose exact name has
+      # historically been `demucs.cpp.main`. If upstream renames it, this
+      # find step needs adjusting — the workflow will fail loudly.
+      - name: Locate binary
+        id: locate
+        shell: bash
+        run: |
+          set -e
+          # Search likely build output locations
+          CANDIDATE=$(find build -type f -name '${{ matrix.bin_name }}' | head -1)
+          if [ -z "$CANDIDATE" ]; then
+            echo "::error::Could not find ${{ matrix.bin_name }} under build/."
+            echo "::error::Tree was:"
+            find build -maxdepth 4 -type f -name '*demucs*' -o -name '*.exe' | head -30
+            exit 1
+          fi
+          echo "candidate=$CANDIDATE" >> "$GITHUB_OUTPUT"
+          echo "Found: $CANDIDATE"
+
+      - name: Stage as demucs-cli
+        shell: bash
+        run: |
+          mkdir -p staged
+          cp "${{ steps.locate.outputs.candidate }}" "staged/${{ matrix.asset }}"
+          # Strip on Unix to keep size down (no symbols).
+          if [ "${{ matrix.label }}" != "win-x64" ]; then
+            strip "staged/${{ matrix.asset }}" || true
+            chmod +x "staged/${{ matrix.asset }}"
+          fi
+          ls -la staged/
+
+      # ─── Sign macOS binary if certs available ───────────────────────
+      # Skip if MACOS_CERT_BASE64 secret is missing — leaves the binary
+      # unsigned, which is fine for dev/test but will hit Gatekeeper at
+      # the venue.
+      - name: Sign + notarise (macOS)
+        if: startsWith(matrix.label, 'mac-') && env.HAVE_MAC_CERT == 'true'
+        env:
+          HAVE_MAC_CERT: ${{ secrets.MACOS_CERT_BASE64 != '' }}
+          CERT_BASE64:   ${{ secrets.MACOS_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          echo "$CERT_BASE64" | base64 --decode > cert.p12
+          KEYCHAIN=build.keychain
+          security create-keychain -p actions $KEYCHAIN
+          security default-keychain -s $KEYCHAIN
+          security unlock-keychain -p actions $KEYCHAIN
+          security import cert.p12 -k $KEYCHAIN -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions $KEYCHAIN
+          codesign --force --options runtime --sign "$SIGNING_IDENTITY" \
+                   --timestamp "staged/${{ matrix.asset }}"
+          codesign --verify --verbose=2 "staged/${{ matrix.asset }}"
+
+      # ─── Sign Windows binary if certs available ─────────────────────
+      - name: Sign (Windows)
+        if: matrix.label == 'win-x64' && env.HAVE_WIN_CERT == 'true'
+        env:
+          HAVE_WIN_CERT: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+          CERT_BASE64:   ${{ secrets.WINDOWS_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          [System.IO.File]::WriteAllBytes("cert.pfx",
+            [System.Convert]::FromBase64String($env:CERT_BASE64))
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          & $signtool sign /f cert.pfx /p $env:CERT_PASSWORD `
+                          /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 `
+                          "staged/${{ matrix.asset }}"
+          & $signtool verify /pa "staged/${{ matrix.asset }}"
+
+      # ─── Compute SHA-256 ────────────────────────────────────────────
+      - name: Compute SHA-256
+        id: hash
+        shell: bash
+        run: |
+          if [ "${{ matrix.label }}" = "win-x64" ]; then
+            HASH=$(certutil -hashfile "staged/${{ matrix.asset }}" SHA256 | sed -n '2p' | tr -d '[:space:]' || sha256sum "staged/${{ matrix.asset }}" | awk '{print $1}')
+          else
+            HASH=$(shasum -a 256 "staged/${{ matrix.asset }}" | awk '{print $1}')
+          fi
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Hash: $HASH"
+
+      # ─── Upload as workflow artifact ────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: staged/${{ matrix.asset }}
+
+      - name: Record metadata
+        shell: bash
+        run: |
+          mkdir -p meta
+          cat > "meta/${{ matrix.label }}.json" <<EOF
+          {
+            "platform":  "${{ matrix.label }}",
+            "filename":  "${{ matrix.asset }}",
+            "sha256":    "${{ steps.hash.outputs.sha256 }}",
+            "size":      $(wc -c < "staged/${{ matrix.asset }}"),
+            "demucs_cpp_ref": "${{ github.event.inputs.demucs_cpp_ref }}"
+          }
+          EOF
+      - name: Upload metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: meta-${{ matrix.label }}
+          path: meta/${{ matrix.label }}.json
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-22.04
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Collect binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Rename binaries with platform suffix for release upload
+        run: |
+          set -e
+          mkdir -p release
+          for label in win-x64 mac-arm64 mac-x64 linux-x64; do
+            if [ -d "artifacts/$label" ]; then
+              # File inside is either demucs-cli or demucs-cli.exe — keep
+              # the right extension and suffix with platform tag.
+              for f in artifacts/$label/*; do
+                base=$(basename "$f")
+                ext=""
+                if [[ "$base" == *.exe ]]; then ext=".exe"; fi
+                cp "$f" "release/demucs-cli-${label}${ext}"
+              done
+            fi
+          done
+          ls -la release/
+
+      - name: Aggregate metadata + checksums
+        run: |
+          set -e
+          mkdir -p release
+          echo "{" > release/manifest.json
+          first=1
+          for meta in artifacts/meta-*/*.json; do
+            label=$(basename "$meta" .json)
+            if [ "$first" = "1" ]; then first=0; else echo "," >> release/manifest.json; fi
+            printf '"%s":' "$label" >> release/manifest.json
+            cat "$meta" >> release/manifest.json
+          done
+          echo "}" >> release/manifest.json
+          # Pretty-print
+          python3 -c 'import json,sys; d=json.load(open("release/manifest.json")); print(json.dumps(d, indent=2))' > release/manifest.pretty.json
+          mv release/manifest.pretty.json release/manifest.json
+          cat release/manifest.json
+          # SHA-256 file
+          (cd release && sha256sum demucs-cli-* > SHA256SUMS)
+          cat release/SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ github.event.inputs.bundle_version }}
+          name:       ${{ github.event.inputs.bundle_version }}
+          body_path:  release/manifest.json
+          files: |
+            release/demucs-cli-*
+            release/manifest.json
+            release/SHA256SUMS

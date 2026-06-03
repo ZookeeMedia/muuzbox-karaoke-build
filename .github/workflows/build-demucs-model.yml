@@ -1,0 +1,143 @@
+name: Build Demucs.cpp Model
+
+# Converts the official Demucs htdemucs_v4 PyTorch weights to the
+# ggml format demucs.cpp consumes. The output is a single ~250 MB
+# file that's IDENTICAL across all platforms — model is data, not
+# code — so we run this once, not per-OS.
+#
+# Triggered manually. The model rarely needs rebuilding (only when
+# Demucs upstream ships new weights, which happens ~yearly).
+#
+# This workflow uses Python + PyTorch, so it's slow (cold start ~10
+# min, total ~20 min). The binary build workflow is the one we'll
+# trigger more often.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: 'Bundle version tag (must match the binary release)'
+        required: true
+        default: 'demucs-cli-v0.1.0'
+      demucs_cpp_ref:
+        description: 'demucs.cpp ref — the convert.py we use comes from here'
+        required: true
+        default: 'main'
+      model_name:
+        description: 'Demucs model to convert. htdemucs is the 4-stem default; htdemucs_ft is the fine-tuned variant.'
+        required: true
+        default: 'htdemucs'
+        type: choice
+        options:
+          - htdemucs
+          - htdemucs_ft
+
+env:
+  DEMUCS_CPP_REPO: sevagh/demucs.cpp
+
+jobs:
+  build-model:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout demucs.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DEMUCS_CPP_REPO }}
+          ref:        ${{ github.event.inputs.demucs_cpp_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install conversion deps
+        run: |
+          python -m pip install --upgrade pip
+          # Install Demucs (which transitively pulls PyTorch) and the
+          # numpy/torch versions demucs.cpp's convert.py expects.
+          # Pinning torch to a CPU build keeps the runner small.
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install demucs numpy
+          # Whatever convert.py needs from demucs.cpp itself (usually
+          # nothing beyond the above).
+          if [ -f scripts/convert-pth-to-ggml.py ]; then
+            echo "convert script: scripts/convert-pth-to-ggml.py"
+          elif [ -f convert.py ]; then
+            echo "convert script: convert.py"
+          else
+            echo "::warning::Could not locate a known convert.py. Inspect the repo and adjust this step."
+            find . -name '*.py' | xargs grep -l 'convert' | head -10
+          fi
+
+      - name: Download Demucs PyTorch weights
+        run: |
+          set -e
+          # Demucs caches weights under ~/.cache/torch/hub/checkpoints/
+          # when first loaded. Triggering a tiny "load model" call
+          # forces the download via its built-in resolver.
+          python -c "from demucs.pretrained import get_model; get_model('${{ github.event.inputs.model_name }}')"
+          ls -lah ~/.cache/torch/hub/checkpoints/ || true
+
+      - name: Run conversion
+        run: |
+          set -e
+          mkdir -p out
+          # The exact convert script name has varied across demucs.cpp
+          # versions. Try the known locations in order. The output file
+          # name also varies — collect whatever .bin lands in cwd.
+          if [ -f scripts/convert-pth-to-ggml.py ]; then
+            python scripts/convert-pth-to-ggml.py --model ${{ github.event.inputs.model_name }} --output out/
+          elif [ -f convert.py ]; then
+            python convert.py --model ${{ github.event.inputs.model_name }} --output out/
+          else
+            echo "::error::No convert script found. Manual intervention needed — see docs/karaoke-build-pipeline.md."
+            exit 1
+          fi
+          ls -lah out/
+
+      - name: Normalise output filename
+        run: |
+          set -e
+          mkdir -p staged
+          # The Electron app expects this exact name (matches PATHS.modelPath()
+          # in karaokeInstaller.js).
+          BIN=$(find out -name '*.bin' -size +100M | head -1)
+          if [ -z "$BIN" ]; then
+            echo "::error::No .bin >100MB produced — conversion likely failed."
+            ls -la out/
+            exit 1
+          fi
+          cp "$BIN" staged/htdemucs.bin
+          ls -lah staged/
+
+      - name: Compute SHA-256
+        id: hash
+        run: |
+          HASH=$(shasum -a 256 staged/htdemucs.bin | awk '{print $1}')
+          SIZE=$(wc -c < staged/htdemucs.bin)
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE"   >> "$GITHUB_OUTPUT"
+          echo "Model SHA-256: $HASH"
+          echo "Model size:    $SIZE bytes"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-${{ github.event.inputs.model_name }}
+          path: staged/htdemucs.bin
+
+      - name: Attach to existing release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:    ${{ github.event.inputs.bundle_version }}
+          append_body: true
+          body: |
+
+            ## Model
+
+            * **model**: `${{ github.event.inputs.model_name }}`
+            * **filename**: `htdemucs.bin`
+            * **sha256**: `${{ steps.hash.outputs.sha256 }}`
+            * **size**: ${{ steps.hash.outputs.size }} bytes
+          files: |
+            staged/htdemucs.bin

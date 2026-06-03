@@ -1,0 +1,14 @@
+# Local CI test outputs
+.cache/
+dist/
+build/
+staged/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor noise
+.vscode/
+.idea/
+*.swp

@@ -83,7 +83,10 @@ jobs:
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg.exe install libsndfile:x64-windows-static
+          # libsndfile for audio I/O; openblas for the BLAS routines
+          # demucs.cpp's matrix code needs (macOS uses Accelerate
+          # automatically, Linux finds OpenBLAS on $LD_LIBRARY_PATH).
+          .\vcpkg\vcpkg.exe install libsndfile:x64-windows-static openblas:x64-windows-static
         shell: pwsh
 
       # ─── Patch CMakeLists for MSVC (Windows only) ───────────────────
@@ -120,12 +123,18 @@ jobs:
 
       - name: Configure (Windows)
         if: matrix.label == 'win-x64'
+        # PowerShell treats `3.5` as a numeric-literal-and-method-call,
+        # which splits our -DCMAKE_POLICY_VERSION_MINIMUM=3.5 arg into
+        # two pieces. Wrapping each -D arg in quotes forces literal
+        # string handling. Also pin BLA_VENDOR so find_package(BLAS)
+        # uses the OpenBLAS vcpkg just installed.
         run: |
           cmake -S . -B build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-            -DCMAKE_TOOLCHAIN_FILE="${PWD}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+            "-DCMAKE_BUILD_TYPE=Release" `
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" `
+            "-DCMAKE_TOOLCHAIN_FILE=${PWD}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            "-DVCPKG_TARGET_TRIPLET=x64-windows-static" `
+            "-DBLA_VENDOR=OpenBLAS"
         shell: pwsh
 
       - name: Build

@@ -86,16 +86,44 @@ jobs:
           .\vcpkg\vcpkg.exe install libsndfile:x64-windows-static
         shell: pwsh
 
+      # ─── Patch CMakeLists for MSVC (Windows only) ───────────────────
+      # Upstream demucs.cpp adds GCC/Clang-only warning flags (-Wextra
+      # etc.) unconditionally. MSVC rejects them with D8021. Strip them.
+      - name: Patch CMakeLists for MSVC
+        if: matrix.label == 'win-x64'
+        shell: bash
+        run: |
+          set -e
+          find . -name 'CMakeLists.txt' -not -path './build/*' | while read -r f; do
+            cp "$f" "$f.bak"
+            sed -i \
+              -e 's/-Wextra//g' \
+              -e 's/-Wpedantic//g' \
+              -e 's/-pedantic//g' \
+              -e 's/-Wno-[a-zA-Z0-9-]*//g' \
+              -e 's/-Werror//g' \
+              "$f"
+            if ! diff -q "$f.bak" "$f" >/dev/null 2>&1; then
+              echo "Patched: $f"
+            fi
+            rm "$f.bak"
+          done
+
       # ─── Configure + build ──────────────────────────────────────────
+      # CMAKE_POLICY_VERSION_MINIMUM=3.5 lets us configure projects whose
+      # cmake_minimum_required() is older than 3.5 — necessary because
+      # newer CMake (4.x on macos-14 / macos-13) removed pre-3.5 compat
+      # entirely.
       - name: Configure (Unix)
         if: matrix.label != 'win-x64'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Configure (Windows)
         if: matrix.label == 'win-x64'
         run: |
           cmake -S . -B build `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
             -DCMAKE_TOOLCHAIN_FILE="${PWD}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
         shell: pwsh

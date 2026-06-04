@@ -128,6 +128,13 @@ jobs:
         # two pieces. Wrapping each -D arg in quotes forces literal
         # string handling. Also pin BLA_VENDOR so find_package(BLAS)
         # uses the OpenBLAS vcpkg just installed.
+        # CXXFLAGS suppresses Eigen template-instantiation warning noise
+        # (C4820 padding, C4514 unreferenced inline, C4625/C4626 deleted
+        # ctor, C4710/C4711 inlining, C4365 sign mismatch, C5045 Spectre,
+        # C4571 catch semantics, C4582/C4583 union ctor). Without these,
+        # the build log balloons to 60k+ lines and GitHub truncates it.
+        env:
+          CXXFLAGS: '/wd4820 /wd4514 /wd4625 /wd4626 /wd4710 /wd4711 /wd4365 /wd5045 /wd4571 /wd4582 /wd4583'
         run: |
           cmake -S . -B build `
             "-DCMAKE_BUILD_TYPE=Release" `

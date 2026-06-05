@@ -9,7 +9,7 @@ Two GitHub Actions workflows:
 
 | Workflow | What it builds | Frequency |
 |---|---|---|
-| [build-demucs-binary.yml](../.github/workflows/build-demucs-binary.yml) | `demucs-cli` for win-x64 / mac-arm64 / mac-x64 / linux-x64 | Whenever upstream demucs.cpp updates, or we want a clean rebuild |
+| [build-demucs-binary.yml](../.github/workflows/build-demucs-binary.yml) | `demucs-cli` for win-x64 / mac-arm64 / linux-x64 | Whenever upstream demucs.cpp updates, or we want a clean rebuild |
 | [build-demucs-model.yml](../.github/workflows/build-demucs-model.yml) | `htdemucs.bin` (ggml-converted Demucs weights) — same file all platforms | Rarely — only when Demucs releases a new model |
 
 Both workflows are **manual** (`workflow_dispatch`). Triggered from the
@@ -20,9 +20,9 @@ GitHub Actions UI; no scheduled runs.
 1. **Pick a `bundle_version`** — e.g. `demucs-cli-v0.1.0`. This tag is shared
    between the two workflows and must match `BUNDLE_VERSION` in the
    Electron app's `src/services/karaokeInstaller.js`.
-2. **Run `Build Demucs.cpp CLI`** with that version. It produces four
-   binaries and a manifest, and creates / updates the matching GitHub
-   Release on this repo.
+2. **Run `Build Demucs.cpp CLI`** with that version. It produces three
+   binaries (win-x64, mac-arm64, linux-x64) and a manifest, and creates
+   / updates the matching GitHub Release on this repo.
 3. **Run `Build Demucs.cpp Model`** with the SAME version. It converts
    PyTorch weights to ggml, attaches the `.bin` to the existing release,
    and amends the release body with the model's SHA-256.
@@ -119,9 +119,12 @@ surface a small adjustment or two:
    alternative is the dynamic triplet (`x64-windows`) plus shipping the
    DLL alongside the .exe.
 
-5. **macOS x64 runners are deprecated by GitHub** — `macos-13` is the
-   last Intel runner. When it's removed, we'd either cross-compile from
-   arm64 or drop x64 Mac support if Intel Mac usage is low.
+5. ~~**macOS x64 runners are deprecated by GitHub**~~ — resolved:
+   `mac-x64` was dropped from the matrix in 2026-06. The macos-13 runner
+   pool was retired; venue Mac installs are all Apple Silicon. If Intel
+   support is needed in future, cross-compile from arm64 with
+   `-arch x86_64` and `lipo`, or re-add the matrix entry when GitHub
+   ships a replacement Intel runner.
 
 ## Updating to a new demucs.cpp version
 
@@ -135,10 +138,10 @@ surface a small adjustment or two:
 
 ## Cost / time budget
 
-Per binary release (all 4 platforms):
+Per binary release (3 platforms):
 
-* Wall-clock: ~15 min (parallel matrix builds)
-* GitHub Actions minutes consumed: ~20 (Windows + macOS minutes count 2× and 10× respectively against the quota, so it's more than it looks)
+* Wall-clock: ~15 min (parallel matrix builds — bound by the slowest, usually Windows)
+* GitHub Actions minutes consumed: ~17 (Windows counts 2× and macOS arm64 counts 10× against the quota, so it's more than wall-clock suggests)
 
 Per model release: ~25 min wall-clock, ~25 minutes consumed.
 

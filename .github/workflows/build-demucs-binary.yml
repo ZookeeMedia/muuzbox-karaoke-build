@@ -43,10 +43,11 @@ jobs:
             runner:   macos-14
             asset:    demucs-cli
             bin_name: demucs.cpp.main
-          - label:    mac-x64
-            runner:   macos-13
-            asset:    demucs-cli
-            bin_name: demucs.cpp.main
+          # mac-x64 (Intel) dropped: GitHub retired the macos-13 Intel
+          # runner pool and Intel Mac usage in venue installs is ~0.
+          # If we ever need Intel support, cross-compile from arm64
+          # with -arch x86_64 + lipo, or re-add this entry when GitHub
+          # ships a replacement Intel runner.
           - label:    linux-x64
             runner:   ubuntu-22.04
             asset:    demucs-cli
@@ -305,7 +306,7 @@ jobs:
         run: |
           set -e
           mkdir -p release
-          for label in win-x64 mac-arm64 mac-x64 linux-x64; do
+          for label in win-x64 mac-arm64 linux-x64; do
             if [ -d "artifacts/$label" ]; then
               # File inside is either demucs-cli or demucs-cli.exe — keep
               # the right extension and suffix with platform tag.

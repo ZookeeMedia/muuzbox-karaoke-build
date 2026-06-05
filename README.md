@@ -30,10 +30,14 @@ After a successful release, these URLs serve the artifacts directly:
 ```
 https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-win-x64.exe
 https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-arm64
-https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-mac-x64
 https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/demucs-cli-linux-x64
 https://github.com/ZookeeMedia/muuzbox-karaoke-build/releases/download/<tag>/htdemucs.bin
 ```
+
+Intel Mac (mac-x64) is intentionally not built — GitHub retired the
+macos-13 runner pool and Intel Mac venue usage is effectively zero.
+The Electron installer surfaces an "unsupported platform" state if a
+user attempts Karaoke install on an Intel Mac.
 
 The installer verifies each file by SHA-256 before activating.
 

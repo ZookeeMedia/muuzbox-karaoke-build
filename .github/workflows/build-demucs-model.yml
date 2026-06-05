@@ -1,7 +1,7 @@
 name: Build Demucs.cpp Model
 
 # Converts the official Demucs htdemucs_v4 PyTorch weights to the
-# ggml format demucs.cpp consumes. The output is a single ~250 MB
+# ggml format demucs.cpp consumes. The output is a single ~84 MB
 # file that's IDENTICAL across all platforms — model is data, not
 # code — so we run this once, not per-OS.
 #
@@ -160,17 +160,20 @@ jobs:
         run: |
           set -e
           mkdir -p staged
-          # convert-pth-to-ggml.py writes ggml-model-htdemucs-4s-f16.bin.
+          # convert-pth-to-ggml.py writes ggml-model-htdemucs-4s-f16.bin
+          # (~80 MB — fp16 quantised from the 252 MB PyTorch fp32 weights).
           # The Electron app expects htdemucs.bin (matches PATHS.modelPath()
-          # in karaokeInstaller.js). Rename here so the release asset and
+          # in karaokeInstaller.js). Rename here so release asset and
           # installer agree without further translation.
-          BIN=$(find out -name 'ggml-model-htdemucs-*.bin' -size +100M | head -1)
+          # 50 MB floor is a sanity check — a truncated file would be
+          # much smaller; a valid one is ~80 MB.
+          BIN=$(find out -name 'ggml-model-htdemucs-*.bin' -size +50M | head -1)
           if [ -z "$BIN" ]; then
-            # Fallback: any .bin >100MB. Defensive against upstream renames.
-            BIN=$(find out -name '*.bin' -size +100M | head -1)
+            # Fallback: any .bin >50MB. Defensive against upstream renames.
+            BIN=$(find out -name '*.bin' -size +50M | head -1)
           fi
           if [ -z "$BIN" ]; then
-            echo "::error::No .bin >100MB produced — conversion likely failed."
+            echo "::error::No .bin >50MB produced — conversion likely failed."
             ls -la out/
             exit 1
           fi

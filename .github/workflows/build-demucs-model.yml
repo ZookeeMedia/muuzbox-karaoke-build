@@ -104,11 +104,15 @@ jobs:
           fi
           # The torch.load test is the real one — proves the file is a
           # valid pickle the convert script can read.
+          # weights_only=False is required: PyTorch 2.6 flipped the
+          # default to True, which refuses to unpickle non-tensor
+          # globals — and the htdemucs checkpoint contains a reference
+          # to demucs.htdemucs.HTDemucs.
           python -c "
           import torch, sys
           try:
               with open('$CKPT', 'rb') as f:
-                  data = torch.load(f, map_location='cpu')
+                  data = torch.load(f, map_location='cpu', weights_only=False)
               print('torch.load OK. Top-level keys:', list(data.keys())[:10])
           except Exception as e:
               print('torch.load FAILED:', repr(e))
@@ -134,15 +138,20 @@ jobs:
             echo "::error::No convert script found. Manual intervention needed — see docs/karaoke-build-pipeline.md."
             exit 1
           fi
-          # Un-swallow the bare `except Exception:` in the convert
-          # script — turn it into `except Exception as _e:` and insert a
-          # repr() + traceback print right after the existing error line,
-          # so CI shows the real failure (file-not-found vs torch.load
-          # corruption vs unpickling error).
+          # Patch (1): PyTorch 2.6+ defaults torch.load weights_only=True,
+          # which refuses to unpickle non-tensor globals — demucs
+          # checkpoints contain a demucs.htdemucs.HTDemucs class ref.
+          # Force weights_only=False so the load succeeds.
+          sed -i 's/torch\.load(fp, map_location="cpu")/torch.load(fp, map_location="cpu", weights_only=False)/g' "$SCRIPT"
+
+          # Patch (2): un-swallow the bare `except Exception:` — turn it
+          # into `except Exception as _e:` and print repr + traceback so
+          # if anything else breaks we see the real cause.
           sed -i 's/except Exception:/except Exception as _e:/' "$SCRIPT"
           sed -i '/Error: failed to load PyTorch model file/a\        print("Underlying:", repr(_e)); import traceback; traceback.print_exc()' "$SCRIPT"
-          echo "----- Patched exception block -----"
-          grep -A4 'except Exception as _e' "$SCRIPT" || true
+
+          echo "----- Patched script (relevant lines) -----"
+          grep -n 'torch\.load\|except Exception\|Underlying' "$SCRIPT" || true
           echo "-----"
           python "$SCRIPT" out
           ls -lah out/

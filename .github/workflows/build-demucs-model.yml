@@ -88,22 +88,63 @@ jobs:
             "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
           ls -lah "$CKPT_DIR"
 
+      - name: Verify checkpoint pre-conversion
+        run: |
+          set -e
+          CKPT="$HOME/.cache/torch/hub/checkpoints/955717e8-8726e21a.th"
+          echo "Checking $CKPT"
+          ls -lah "$CKPT" || (echo "::error::Checkpoint missing"; exit 1)
+          SIZE=$(wc -c < "$CKPT")
+          echo "Size: $SIZE bytes"
+          if [ "$SIZE" -lt 80000000 ]; then
+            echo "::error::Checkpoint too small (got $SIZE, expected ~84 MB) — curl likely got HTML/error page"
+            file "$CKPT"
+            head -c 500 "$CKPT" | od -c | head -20
+            exit 1
+          fi
+          # The torch.load test is the real one — proves the file is a
+          # valid pickle the convert script can read.
+          python -c "
+          import torch, sys
+          try:
+              with open('$CKPT', 'rb') as f:
+                  data = torch.load(f, map_location='cpu')
+              print('torch.load OK. Top-level keys:', list(data.keys())[:10])
+          except Exception as e:
+              print('torch.load FAILED:', repr(e))
+              sys.exit(1)
+          "
+
       - name: Run conversion
         run: |
           set -e
           mkdir -p out
           # demucs.cpp's convert-pth-to-ggml.py takes a single positional
           # dest_dir. With no flags, it reads htdemucs weights from the
-          # torch hub cache (pre-warmed in the previous step) and writes
-          # `ggml-model-htdemucs-4s-f16.bin` into the dest_dir.
-          if [ -f scripts/convert-pth-to-ggml.py ]; then
-            python scripts/convert-pth-to-ggml.py out
-          elif [ -f convert.py ]; then
-            python convert.py out
+          # torch hub cache (pre-staged by the Download step) and writes
+          # `ggml-model-htdemucs-4s-f16.bin` into dest_dir.
+          #
+          # Patch out the bare `except Exception:` that swallows the real
+          # error message — replace with one that re-raises so CI logs
+          # show the actual failure.
+          SCRIPT=""
+          if   [ -f scripts/convert-pth-to-ggml.py ]; then SCRIPT=scripts/convert-pth-to-ggml.py
+          elif [ -f convert.py ];                    then SCRIPT=convert.py
           else
             echo "::error::No convert script found. Manual intervention needed — see docs/karaoke-build-pipeline.md."
             exit 1
           fi
+          # Un-swallow the bare `except Exception:` in the convert
+          # script — turn it into `except Exception as _e:` and insert a
+          # repr() + traceback print right after the existing error line,
+          # so CI shows the real failure (file-not-found vs torch.load
+          # corruption vs unpickling error).
+          sed -i 's/except Exception:/except Exception as _e:/' "$SCRIPT"
+          sed -i '/Error: failed to load PyTorch model file/a\        print("Underlying:", repr(_e)); import traceback; traceback.print_exc()' "$SCRIPT"
+          echo "----- Patched exception block -----"
+          grep -A4 'except Exception as _e' "$SCRIPT" || true
+          echo "-----"
+          python "$SCRIPT" out
           ls -lah out/
 
       - name: Normalise output filename

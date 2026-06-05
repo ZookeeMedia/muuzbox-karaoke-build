@@ -89,14 +89,26 @@ jobs:
           .\vcpkg\vcpkg.exe install libsndfile:x64-windows-static openblas:x64-windows-static
         shell: pwsh
 
-      # ─── Patch CMakeLists for MSVC (Windows only) ───────────────────
-      # Upstream demucs.cpp adds GCC/Clang-only warning flags (-Wextra
-      # etc.) unconditionally. MSVC rejects them with D8021. Strip them.
-      - name: Patch CMakeLists for MSVC
+      # ─── Patch sources for MSVC (Windows only) ──────────────────────
+      # Three issues upstream demucs.cpp doesn't handle for MSVC:
+      #
+      # (1) GCC/Clang-only warning flags (-Wextra etc.) — MSVC rejects
+      #     them with D8021. Strip them from every CMakeLists.txt.
+      #
+      # (2) cli-apps/*.cpp pass a std::filesystem::path to
+      #     write_audio_file() which expects std::string. GCC/Clang
+      #     convert implicitly; MSVC requires explicit .string(). Add it.
+      #
+      # (3) test/test_layers*.cpp has ambiguous Eigen::half operator
+      #     overloads under MSVC. We don't ship the test binary, so just
+      #     skip the demucs.cpp.test target entirely on Windows.
+      - name: Patch sources for MSVC
         if: matrix.label == 'win-x64'
         shell: bash
         run: |
           set -e
+
+          # (1) Strip GCC-only warning flags from every CMakeLists.txt
           find . -name 'CMakeLists.txt' -not -path './build/*' | while read -r f; do
             cp "$f" "$f.bak"
             sed -i \
@@ -107,10 +119,29 @@ jobs:
               -e 's/-Werror//g' \
               "$f"
             if ! diff -q "$f.bak" "$f" >/dev/null 2>&1; then
-              echo "Patched: $f"
+              echo "Patched flags: $f"
             fi
             rm "$f.bak"
           done
+
+          # (2) Add .string() to write_audio_file calls in cli-apps
+          for f in cli-apps/demucs.cpp cli-apps/demucs_v3.cpp cli-apps/demucs_ft.cpp \
+                   cli-apps/demucs_mt.cpp cli-apps/demucs_v3_mt.cpp cli-apps/demucs_ft_mt.cpp; do
+            if [ -f "$f" ]; then
+              sed -i 's/write_audio_file(target_waveform, p_target);/write_audio_file(target_waveform, p_target.string());/g' "$f"
+              echo "Patched calls: $f"
+            fi
+          done
+
+          # (3) Skip the test target — comment out add_executable +
+          # add_test for demucs.cpp.test. Keeps gtest available (some
+          # other paths may reference it) but doesn't build the tests.
+          sed -i \
+            -e 's/^\(add_executable(demucs\.cpp\.test.*\)/# MSVC-disabled: \1/' \
+            -e 's/^\(target_link_libraries(demucs\.cpp\.test.*\)/# MSVC-disabled: \1/' \
+            -e 's/^\(add_test(NAME tests.*\)/# MSVC-disabled: \1/' \
+            CMakeLists.txt
+          echo "Patched CMakeLists.txt to skip test target"
 
       # ─── Configure + build ──────────────────────────────────────────
       # CMAKE_POLICY_VERSION_MINIMUM=3.5 lets us configure projects whose

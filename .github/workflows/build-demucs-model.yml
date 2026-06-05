@@ -69,12 +69,24 @@ jobs:
       - name: Download Demucs PyTorch weights
         run: |
           set -e
-          # Demucs caches weights under ~/.cache/torch/hub/checkpoints/
-          # when first loaded. Triggering a "load model" call forces the
-          # download via its built-in resolver — the convert script needs
-          # them present in the torch hub cache.
-          python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
-          ls -lah ~/.cache/torch/hub/checkpoints/ || true
+          # convert-pth-to-ggml.py hardcodes the expected checkpoint
+          # filename as HT_HUB_PATH = "955717e8-8726e21a.th" and reads it
+          # from torch.hub.get_dir()/checkpoints/. Newer Demucs versions
+          # have moved the file or rename it on download, so calling
+          # demucs.get_model() doesn't reliably put the right file in
+          # the right place.
+          #
+          # Bypass: fetch the exact file from Facebook's CDN to the path
+          # the script expects. URL pattern from facebookresearch/demucs
+          # model registry. If Facebook ever takes this URL down, the
+          # fallback is to pin demucs<X.Y to whichever version still uses
+          # this hash.
+          CKPT_DIR="$HOME/.cache/torch/hub/checkpoints"
+          mkdir -p "$CKPT_DIR"
+          curl -fL --retry 3 \
+            -o "$CKPT_DIR/955717e8-8726e21a.th" \
+            "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
+          ls -lah "$CKPT_DIR"
 
       - name: Run conversion
         run: |

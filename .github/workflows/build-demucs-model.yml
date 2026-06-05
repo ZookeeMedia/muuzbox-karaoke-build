@@ -23,14 +23,11 @@ on:
         description: 'demucs.cpp ref — the convert.py we use comes from here'
         required: true
         default: 'main'
-      model_name:
-        description: 'Demucs model to convert. htdemucs is the 4-stem default; htdemucs_ft is the fine-tuned variant.'
-        required: true
-        default: 'htdemucs'
-        type: choice
-        options:
-          - htdemucs
-          - htdemucs_ft
+      # Phase 1 ships the default htdemucs 4-stem (vocals / drums / bass / other).
+      # The fine-tuned variant (htdemucs_ft) is 4 separate models that the
+      # convert script processes one at a time — adding ~4x the runtime
+      # and a separate file per stem. We'd switch to that only if quality
+      # complaints come back from venues.
 
 env:
   DEMUCS_CPP_REPO: sevagh/demucs.cpp
@@ -73,22 +70,24 @@ jobs:
         run: |
           set -e
           # Demucs caches weights under ~/.cache/torch/hub/checkpoints/
-          # when first loaded. Triggering a tiny "load model" call
-          # forces the download via its built-in resolver.
-          python -c "from demucs.pretrained import get_model; get_model('${{ github.event.inputs.model_name }}')"
+          # when first loaded. Triggering a "load model" call forces the
+          # download via its built-in resolver — the convert script needs
+          # them present in the torch hub cache.
+          python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
           ls -lah ~/.cache/torch/hub/checkpoints/ || true
 
       - name: Run conversion
         run: |
           set -e
           mkdir -p out
-          # The exact convert script name has varied across demucs.cpp
-          # versions. Try the known locations in order. The output file
-          # name also varies — collect whatever .bin lands in cwd.
+          # demucs.cpp's convert-pth-to-ggml.py takes a single positional
+          # dest_dir. With no flags, it reads htdemucs weights from the
+          # torch hub cache (pre-warmed in the previous step) and writes
+          # `ggml-model-htdemucs-4s-f16.bin` into the dest_dir.
           if [ -f scripts/convert-pth-to-ggml.py ]; then
-            python scripts/convert-pth-to-ggml.py --model ${{ github.event.inputs.model_name }} --output out/
+            python scripts/convert-pth-to-ggml.py out
           elif [ -f convert.py ]; then
-            python convert.py --model ${{ github.event.inputs.model_name }} --output out/
+            python convert.py out
           else
             echo "::error::No convert script found. Manual intervention needed — see docs/karaoke-build-pipeline.md."
             exit 1
@@ -99,9 +98,15 @@ jobs:
         run: |
           set -e
           mkdir -p staged
-          # The Electron app expects this exact name (matches PATHS.modelPath()
-          # in karaokeInstaller.js).
-          BIN=$(find out -name '*.bin' -size +100M | head -1)
+          # convert-pth-to-ggml.py writes ggml-model-htdemucs-4s-f16.bin.
+          # The Electron app expects htdemucs.bin (matches PATHS.modelPath()
+          # in karaokeInstaller.js). Rename here so the release asset and
+          # installer agree without further translation.
+          BIN=$(find out -name 'ggml-model-htdemucs-*.bin' -size +100M | head -1)
+          if [ -z "$BIN" ]; then
+            # Fallback: any .bin >100MB. Defensive against upstream renames.
+            BIN=$(find out -name '*.bin' -size +100M | head -1)
+          fi
           if [ -z "$BIN" ]; then
             echo "::error::No .bin >100MB produced — conversion likely failed."
             ls -la out/
@@ -123,7 +128,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: model-${{ github.event.inputs.model_name }}
+          name: model-htdemucs
           path: staged/htdemucs.bin
 
       - name: Attach to existing release
@@ -135,7 +140,7 @@ jobs:
 
             ## Model
 
-            * **model**: `${{ github.event.inputs.model_name }}`
+            * **model**: `htdemucs` (4-stem: vocals / drums / bass / other)
             * **filename**: `htdemucs.bin`
             * **sha256**: `${{ steps.hash.outputs.sha256 }}`
             * **size**: ${{ steps.hash.outputs.size }} bytes
